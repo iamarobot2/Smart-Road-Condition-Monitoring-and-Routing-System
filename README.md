@@ -1,6 +1,6 @@
 # 🚗 SMART ROAD CONDITION MONITORING AND OPTIMAL ROUTING SYSTEM USING YOLOv11
 
-This project aims to enhance road safety by detecting and mapping road conditions, specifically potholes, in real-time using computer vision and deep learning. By leveraging the YOLOv11 model, the system quickly and accurately identifies potholes, assesses their severity, and determines their location relative to the vehicle. Drivers receive immediate alerts, allowing them to avoid potential hazards.
+This project aims to enhance road safety by providing a navigation software that detects and maps road conditions, specifically potholes, in real-time using computer vision and deep learning. Leveraging the YOLOv11 model, the system accurately identifies potholes, assesses their severity, and determines their GPS-based location, updating the map continuously. The application includes an optimal routing feature, guiding drivers along the safest and most efficient routes by avoiding hazardous road segments. This comprehensive solution offers real-time alerts and intelligent routing, helping drivers avoid potential hazards and ensuring a smoother, safer driving experience.
 
 ## ✨ Key Features
 
