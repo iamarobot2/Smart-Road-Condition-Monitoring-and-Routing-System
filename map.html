@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Pothole Map</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <style>
+        #map { height: 600px; }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    <script>
+        var map = L.map('map').setView([12.9716, 77.5946], 15);
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '© OpenStreetMap contributors'
+        }).addTo(map);
+
+        // Example pothole data (replace with data fetched from your database)
+        var potholes = [
+            { lat: 12.9716, lon: 77.5946, severity: "High" },
+            { lat: 12.9720, lon: 77.5950, severity: "Moderate" }
+        ];
+
+        potholes.forEach(function(pothole) {
+            var color = pothole.severity === "High" ? "red" :
+                        pothole.severity === "Moderate" ? "orange" : "green";
+            L.marker([pothole.lat, pothole.lon])
+                .addTo(map)
+                .bindPopup(`Severity: ${pothole.severity}`)
+                .setIcon(new L.Icon.Default({ className: `marker-${color}` }));
+        });
+    </script>
+</body>
+</html>
