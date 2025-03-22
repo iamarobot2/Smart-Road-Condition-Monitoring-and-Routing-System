@@ -13,7 +13,7 @@ if not os.path.exists(model_path):
 model = YOLO(model_path)
 
 # Connect to the WebSocket server from the sensor server app for GPS data
-gps_ws_url = "ws://192.168.20.11:8080/gps"
+gps_ws_url = "ws://192.168.27.123:8080/gps"
 gps_ws = websocket.WebSocket()
 gps_ws.connect(gps_ws_url)
 
@@ -94,7 +94,7 @@ def adjust_gps_coordinates(lat, lon, distance, angle):
     return new_lat, new_lon
 
 # Use the correct IP address from the IP Camera app for the video feed
-mjpeg_url = 'http://192.168.20.2:8080/video'
+mjpeg_url = 'http://192.168.27.198:8080/video'
 
 cap = cv2.VideoCapture(mjpeg_url)
 
