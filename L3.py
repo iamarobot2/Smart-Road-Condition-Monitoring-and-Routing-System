@@ -6,10 +6,14 @@ import json
 import numpy as np
 import threading
 import math
+import torch
+
 
 REFERENCE_DISTANCE = 10.0
 KNOWN_AREA = 2500.0
 FOCAL_LENGTH = 800 
+
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 def is_pothole_detected(lat, lon):
     """Check if a pothole has already been detected at the given GPS coordinates."""
@@ -54,7 +58,7 @@ def calculate_severity(area_cm2):
 model_path = "./model/bestseg.pt"
 if not os.path.exists(model_path):
     raise FileNotFoundError(f"Model file not found: {model_path}")
-model = YOLO(model_path)
+model = YOLO(model_path).to(device)
 
 # Connect to the WebSocket server for GPS data
 gps_ws_url = "ws://192.168.105.198:8080/gps"
@@ -99,7 +103,7 @@ def parse_gps_data():
 # Rest of the code remains unchanged...
 
 # Use the correct IP address from the IP Camera app for the video feed
-mjpeg_url = 'https://192.168.105.34:8080/video'
+mjpeg_url = 'https://192.168.105.34:9090/video'
 
 cap = cv2.VideoCapture(mjpeg_url)
 
