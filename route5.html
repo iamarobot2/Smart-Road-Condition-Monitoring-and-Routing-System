@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Accurate Pothole Routing</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css"/>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.css"/>
+  <style>
+    body { margin: 0; font-family: Arial; background: #f4f4f4; display: flex; flex-direction: column; align-items: center; }
+    h1 { margin: 10px 0; font-size: 24px; color: #333; text-align: center; }
+    #map { width: 90%; height: 80vh; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
+    .legend { background: white; padding: 10px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.2); margin-top: 10px; display: flex; gap: 20px; }
+    .legend span { display: inline-block; width: 12px; height: 12px; margin-right: 5px; border-radius: 50%; }
+    .controls { margin: 10px; display: flex; gap: 10px; }
+    .controls input { padding: 5px; font-size: 14px; }
+    .controls button { padding: 5px 10px; font-size: 14px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <h1>Pothole-Aware Routing (Accurate Counting)</h1>
+  <div class="controls">
+    <input type="text" id="source" placeholder="Source (lat,lng)">
+    <input type="text" id="destination" placeholder="Destination (lat,lng)">
+    <button onclick="createRoute()">Get Safest Route</button>
+  </div>
+  <div id="map"></div>
+  <div class="legend">
+    <p><span style="background:green"></span> Low (1 pt)</p>
+    <p><span style="background:orange"></span> Moderate (2 pts)</p>
+    <p><span style="background:red"></span> High (3 pts)</p>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.js"></script>
+  <script>
+    // CONFIG
+    const MAPBOX_TOKEN = 'pk.eyJ1IjoiZ290bWFqaSIsImEiOiJjbTk2MnV4ZWIwcXYzMmtzamxsb2JtZDBrIn0.lmTR_LMzgdQbQoL9E0FaUw'; // 🔑 REPLACE ME***********************
+    const POTHOLE_DETECTION_RADIUS = 50; // meters
+    let map, routingControl, potholes = [];
+    let sourceMarker, destinationMarker, optimalRouteLayer;
+
+    // INIT MAP
+    function initMap() {
+      map = L.map('map').setView([9.52853, 76.82520], 15);
+      L.tileLayer(`https://api.mapbox.com/styles/v1/mapbox/streets-v11/tiles/{z}/{x}/{y}?access_token=${MAPBOX_TOKEN}`, {
+        attribution: '© Mapbox'
+      }).addTo(map);
+    }
+
+    // CUSTOM MARKERS
+    const blackIcon = new L.Icon({
+      iconUrl: 'https://cdn.rawgit.com/pointhi/leaflet-color-markers/master/img/marker-icon-black.png',
+      shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+      iconSize: [25, 41],
+      iconAnchor: [12, 41],
+      popupAnchor: [1, -34],
+      shadowSize: [41, 41]
+    });
+
+    // FETCH POTHOLES
+    async function fetchPotholes() {
+      try {
+        const response = await fetch('http://localhost:5000/kuzhi');
+        potholes = await response.json();
+        updatePotholeMarkers();
+      } catch (error) {
+        console.error('Error:', error);
+      }
+    }
+
+    // UPDATE POTHOLES ON MAP
+    function updatePotholeMarkers() {
+      map.eachLayer(layer => { if (layer instanceof L.CircleMarker) map.removeLayer(layer); });
+      
+      potholes.forEach(pothole => {
+        if (!pothole.latitude || !pothole.longitude) return;
+        const color = {'High':'red', 'Moderate':'orange', 'Low':'green'}[pothole.severity] || 'gray';
+        L.circleMarker([pothole.latitude, pothole.longitude], {
+          color: color, radius: 8, fillOpacity: 0.8
+        }).addTo(map).bindPopup(`<b>${pothole.severity}</b>`);
+      });
+    }
+
+    // MAIN ROUTE FUNCTION
+    async function createRoute() {
+      const src = document.getElementById("source").value.trim().split(',').map(Number);
+      const dst = document.getElementById("destination").value.trim().split(',').map(Number);
+      if (!src[0] || !dst[0]) { alert("Enter both points!"); return; }
+
+      clearMapElements();
+      
+      // Add markers
+      sourceMarker = L.marker([src[0], src[1]], {icon: blackIcon}).addTo(map).bindPopup("Start");
+      destinationMarker = L.marker([dst[0], dst[1]], {icon: blackIcon}).addTo(map).bindPopup("End");
+
+      // Get routes
+      const routes = await fetchMapboxRoutes(src[0], src[1], dst[0], dst[1]);
+      if (!routes?.length) { alert("No routes found"); return; }
+
+      // Find and show best route
+      const optimalRoute = findOptimalRoute(routes);
+      displayOptimalRoute(optimalRoute, src[0], src[1], dst[0], dst[1]);
+    }
+
+    // FETCH ROUTES FROM MAPBOX
+    async function fetchMapboxRoutes(srcLat, srcLng, dstLat, dstLng) {
+      try {
+        const response = await fetch(
+          `https://api.mapbox.com/directions/v5/mapbox/driving/${srcLng},${srcLat};${dstLng},${dstLat}?` +
+          `alternatives=true&geometries=geojson&access_token=${MAPBOX_TOKEN}`
+        );
+        return (await response.json()).routes;
+      } catch (error) {
+        console.error("Routing error:", error);
+        return null;
+      }
+    }
+
+    // FIND BEST ROUTE (FIXED POTHLE COUNTING)
+    function findOptimalRoute(routes) {
+      let bestRoute = null;
+      let lowestScore = Infinity;
+
+      routes.forEach(route => {
+        const coords = route.geometry.coordinates.map(c => [c[1], c[0]]);
+        const score = calculatePotholeScore(coords);
+        
+        console.log(`Route ${routes.indexOf(route)}: ${score} pothole pts | ${(route.distance/1000).toFixed(2)} km`);
+        
+        if (score < lowestScore) {
+          lowestScore = score;
+          bestRoute = route;
+        }
+      });
+
+      console.log("🏆 Selected route with score:", lowestScore);
+      return bestRoute;
+    }
+
+    // ACCURATE POTHLE SCORING (FIXED)
+    function calculatePotholeScore(routeCoords) {
+      let total = 0;
+      
+      potholes.forEach(pothole => {
+        // Find closest point on route to this pothole
+        let minDist = Infinity;
+        for (let i = 0; i < routeCoords.length; i++) {
+          const dist = calculateDistance(routeCoords[i], [pothole.latitude, pothole.longitude]);
+          if (dist < minDist) minDist = dist;
+        }
+        
+        // If within range, add to total
+        if (minDist < POTHOLE_DETECTION_RADIUS) {
+          const pts = {'High':3, 'Moderate':2, 'Low':1}[pothole.severity] || 0;
+          console.log(`   Pothole (${pothole.severity}): ${minDist.toFixed(1)}m -> +${pts}`);
+          total += pts;
+        }
+      });
+      
+      return total;
+    }
+
+    // DISPLAY ROUTE
+    function displayOptimalRoute(route, srcLat, srcLng, dstLat, dstLng) {
+      if (routingControl) map.removeControl(routingControl);
+      if (optimalRouteLayer) map.removeLayer(optimalRouteLayer);
+
+      optimalRouteLayer = L.geoJSON(route.geometry, {
+        style: { color: '#0066ff', weight: 6 }
+      }).addTo(map);
+
+      routingControl = L.Routing.control({
+        waypoints: [L.latLng(srcLat, srcLng), L.latLng(dstLat, dstLng)],
+        router: L.Routing.mapbox(MAPBOX_TOKEN, { profile: 'mapbox/driving' }),
+        show: false,
+        createMarker: () => null,
+        lineOptions: { styles: [{ opacity: 0 }] }
+      }).addTo(map);
+
+      map.fitBounds(optimalRouteLayer.getBounds(), { padding: [50, 50] });
+    }
+
+    // HELPER FUNCTIONS
+    function clearMapElements() {
+      [sourceMarker, destinationMarker, optimalRouteLayer, routingControl]
+        .forEach(item => item && map.removeLayer(item));
+    }
+
+    function calculateDistance(coord1, coord2) {
+      const R = 6371e3;
+      const φ1 = coord1[0] * Math.PI/180;
+      const φ2 = coord2[0] * Math.PI/180;
+      const Δφ = (coord2[0] - coord1[0]) * Math.PI/180;
+      const Δλ = (coord2[1] - coord1[1]) * Math.PI/180;
+      const a = Math.sin(Δφ/2)**2 + Math.cos(φ1)*Math.cos(φ2)*Math.sin(Δλ/2)**2;
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    }
+
+    // START APP
+    initMap();
+    fetchPotholes();
+    setInterval(fetchPotholes, 10000);
+  </script>
+</body>
+</html>

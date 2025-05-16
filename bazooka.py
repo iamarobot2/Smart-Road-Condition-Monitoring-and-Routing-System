@@ -8,13 +8,19 @@ import threading
 import math
 import torch
 import time
+import requests  # Import requests to send HTTP requests to the server
 
-
+# Constants
 REFERENCE_DISTANCE = 10.0
 KNOWN_AREA = 2500.0
 FOCAL_LENGTH = 800 
+API_URL = "http://localhost:5000/kuzhi"  # Replace with your server's URL
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+# GPS Data and Pothole Detection Cache
+gps_cache = None
+detected_potholes = []
 
 def is_pothole_detected(lat, lon):
     """Check if a pothole has already been detected at the given GPS coordinates."""
@@ -25,10 +31,8 @@ def is_pothole_detected(lat, lon):
 
 def adjust_gps_coordinates(lat, lon, distance, angle):
     """Adjust GPS coordinates based on distance and angle from the camera."""
-    # Earth's radius in meters
-    R = 6378137.0
+    R = 6378137.0  # Earth's radius in meters
 
-    # Convert latitude and longitude from degrees to radians
     lat_rad = math.radians(lat)
     lon_rad = math.radians(lon)
 
@@ -36,7 +40,6 @@ def adjust_gps_coordinates(lat, lon, distance, angle):
     new_lat_rad = lat_rad + (distance / R) * math.cos(angle)
     new_lon_rad = lon_rad + (distance / R) * math.sin(angle) / math.cos(lat_rad)
 
-    # Convert new latitude and longitude from radians to degrees
     new_lat = math.degrees(new_lat_rad)
     new_lon = math.degrees(new_lon_rad)
 
@@ -54,6 +57,24 @@ def calculate_severity(area_cm2):
     else:
         return "High", (0, 0, 255)
 
+def send_pothole_to_server(lat, lon, severity):
+    """Send pothole data to the Express server."""
+    try:
+        data = {
+            "latitude": lat,
+            "longitude": lon,
+            "severity": severity
+        }
+        
+        # Send POST request to the server
+        response = requests.post(API_URL, json=data)
+        
+        if response.status_code == 201:
+            print(f"Successfully added pothole data to the server: {lat}, {lon}, {severity}")
+        else:
+            print(f"Failed to add pothole data. Status code: {response.status_code}")
+    except Exception as e:
+        print(f"Error sending pothole data to server: {e}")
 
 # Load the model
 model_path = "./model/bestseg.pt"
@@ -62,20 +83,15 @@ if not os.path.exists(model_path):
 model = YOLO(model_path).to(device)
 
 # Connect to the WebSocket server for GPS data
-gps_ws_url = "ws://192.168.27.103:8080/gps"
+gps_ws_url = "ws://192.168.102.141:8080/gps"
 gps_ws = websocket.WebSocket()
 gps_ws.connect(gps_ws_url)
-
-# Cache for GPS data
-gps_cache = None
-detected_potholes = []
 
 def get_gps_location():
     """Read GPS data from the WebSocket server and cache it."""
     global gps_cache
     while True:
         try:
-            # Receive new GPS data
             gps_data = gps_ws.recv()
             print(f"Received GPS data: {gps_data}")
             gps_cache = gps_data  # Cache the latest GPS data
@@ -101,44 +117,26 @@ def parse_gps_data():
         print(f"Error parsing GPS data: {e}")
         return None, None
 
-# Rest of the code remains unchanged...
-
 # Use the correct IP address from the IP Camera app for the video feed
-mjpeg_url = 'https://192.168.27.225:8080/video'
+mjpeg_url = 'https://192.168.102.117:8080/video'
 
 cap = cv2.VideoCapture(mjpeg_url)
 
-if not cap.isOpened():
+if not cap.isOpened(): 
     print("Error: Could not open video stream at", mjpeg_url)
     exit()
 
 def process_frame():
-    #last_processed_time = time.time()  # Initialize the timestamp for the last processed frame
-
     while True:
         ret, frame = cap.read()
         if not ret:
             print("Error: Failed to capture frame")
             break
 
-
-            '''
-        # Check if at least one second has passed since the last processed frame
-        current_time = time.time()
-        if current_time - last_processed_time < 0.4:  # Skip frames if less than 1 second has passed
-            continue
-        
-        # Update the timestamp for the last processed frame
-        last_processed_time = current_time
-        '''
-            
-
-            
         results = model.predict(frame, conf=0.6, iou=0.4)
 
         annotated_frame = frame.copy()
 
-        # Parse cached GPS data
         lat, lon = parse_gps_data()
         if lat is None or lon is None:
             lat, lon = 0.000000, 0.000000  # Default values if no GPS data is available
@@ -153,7 +151,6 @@ def process_frame():
                 (255, 255, 255),
                 3,
             )
-            print(f"GPS coordinates: ({lat:.6f}, {lon:.6f})")
 
         if results[0].masks is not None and len(results[0].masks.data) > 0:
             for mask in results[0].masks.data:
@@ -164,7 +161,7 @@ def process_frame():
                 pixels_area = cv2.countNonZero(mask_resized)
 
                 # Approximate distance of the object
-                distance_m = REFERENCE_DISTANCE  # Assuming constant distance
+                distance_m = REFERENCE_DISTANCE
 
                 # Calculate real-world area of the pothole
                 real_area_cm2 = estimate_real_area(pixels_area, distance_m)
@@ -205,14 +202,14 @@ def process_frame():
                     detected_potholes.append({'lat': pothole_lat, 'lon': pothole_lon, 'severity': severity})
                     print(f"New pothole detected at coordinates: ({pothole_lat:.6f}, {pothole_lon:.6f}) with severity: {severity}")
 
+                    # Send the detected pothole data to the server
+                    send_pothole_to_server(pothole_lat, pothole_lon, severity)
+
                 mask_colored = np.zeros_like(frame)
                 mask_colored[mask_resized > 0] = color
                 annotated_frame = cv2.addWeighted(annotated_frame, 1, mask_colored, 0.5, 0)
 
         cv2.imshow("Pothole Detection", cv2.resize(annotated_frame, (640, 480)))
-
-        if lat and lon:
-            print(f"GPS coordinates after frame: ({lat:.6f}, {lon:.6f})")
 
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
@@ -220,8 +217,7 @@ def process_frame():
     cap.release()
     cv2.destroyAllWindows()
 
-# ... (rest of the code remains unchanged)
-
+# Start the frame processing in a separate thread
 frame_thread = threading.Thread(target=process_frame)
 frame_thread.daemon = True
 frame_thread.start()
